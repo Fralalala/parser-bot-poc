@@ -4,11 +4,20 @@ import esprima from "esprima";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 
-const supportedTypes = [esprima.Syntax.ExportNamedDeclaration];
+const supportedTypes = [
+    esprima.Syntax.ExportNamedDeclaration,
+    esprima.Syntax.VariableDeclaration,
+];
+const supportedImports = [
+    esprima.Syntax.ImportDefaultSpecifier,
+    esprima.Syntax.ImportSpecifier,
+];
 
 const repositoryName = "parser-bot";
 
 const pathCodeBlocks = new Map();
+const importDeclarationsNames = {};
+const pathCalls = {};
 
 // TODO: Enable folder path, so we check on each files of the folder
 const servicePath =
@@ -16,7 +25,6 @@ const servicePath =
 
 const getPrettyfiedFile = async (filePath) => {
     // add checker if it exists
-
     const code = readFileSync(filePath, "utf-8");
     return await format(code, { parser: "babel" });
 };
@@ -28,7 +36,7 @@ const getCodeBlocks = (code) => {
     const data = {
         importPaths: [],
         blocks: [],
-        fucntions: []
+        fucntions: [],
     };
 
     esprimaResponse.body.forEach((body) => {
@@ -46,9 +54,22 @@ const getCodeBlocks = (code) => {
             ).id.name;
         }
 
-        if (body.type === esprima.Syntax.ImportDeclaration)
+        if (body.type === esprima.Syntax.ImportDeclaration) {
             body.source.value && data.importPaths.push(body.source.value);
-        else
+
+            body.specifiers.forEach((specifier) => {
+                if (supportedImports.includes(specifier.type)) {
+                    const code = "";
+
+                    importDeclarationsNames[specifier.local.name] = {
+                        type: specifier.type,
+                        importPath: body.source.value,
+                        name: specifier.local.name,
+                        code: code,
+                    };
+                }
+            });
+        } else
             data.blocks.push(
                 codeLines.slice(start.line - 1, end.line).join("\n")
             );
@@ -89,68 +110,116 @@ const getImportFilePathFromRelativePath = (importPath, currentPath) => {
     return "/" + initialStructure.join("/");
 };
 
+const visitedPaths = new Set();
+
+let fileDataLedger = {};
+
 const dfs = async (path) => {
-    if (pathCodeBlocks.has(path)) return;
+    if (visitedPaths.has(path)) return;
 
-    const code = await getPrettyfiedFile(path);
+    // const code = await getPrettyfiedFile(path);
 
-    const { importPaths, blocks } = getCodeBlocks(code);
+    // const { importPaths, blocks } = getCodeBlocks(code);
 
-    pathCodeBlocks.set(path, blocks);
+    const fileData = await getCodeBlocksByPath(path);
+    const paths = await getImportPathsByPath(path);
 
-    for (let index = 0; index < importPaths.length; index++) {
+    fileDataLedger = { ...fileDataLedger, ...fileData };
+
+    visitedPaths.add(path);
+
+    for (let index = 0; index < paths.length; index++) {
         const importFilePath = getImportFilePathFromRelativePath(
-            importPaths[index],
+            paths[index],
             servicePath
         );
+
+        console.log("importFilePath", importFilePath);
 
         await dfs(importFilePath);
     }
 };
 
-const generateFunctionNamesPerImport = async  (path) => {
+const getImportPathsByPath = async (path) => {
     const code = await getPrettyfiedFile(path);
+    const codeLines = code.split("\n");
 
-    const { importPaths, blocks } = getCodeBlocks(code);
+    const esprimaResponse = esprima.parseModule(code, { loc: true });
 
-}
+    const importPaths = [];
 
-const getFunctionCallsByCodeBlock = (codeBlock) => {
+    esprimaResponse.body.forEach((body) => {
+        if (
+            body.type === esprima.Syntax.ImportDeclaration &&
+            body.source.type === esprima.Syntax.Literal &&
+            body.source.value.includes("./")
+        ) {
+            importPaths.push(body.source.value);
+        }
+    });
 
-    // const esprimaResponse = esprima.parseModule(codeBlock, { loc: true });
-    
-    // esprimaResponse.body.forEach(block => {
+    return importPaths;
+};
 
-    //     block.declaration.declarations.forEach(el => {
+const getCodeBlocksByPath = async (path) => {
+    const code = await getPrettyfiedFile(path);
+    const codeLines = code.split("\n");
 
-    //         el.init.body.forEach()
+    const fileData = {};
 
-    //     })
+    if (!fileData[path]) fileData[path] = {};
 
-    // })    
+    const esprimaResponse = esprima.parseModule(code, { loc: true });
 
-}
+    esprimaResponse.body.forEach((body) => {
+        // Parses a variable and saves its code block
+
+        let declarations = [];
+
+        if (body.type === esprima.Syntax.VariableDeclaration) {
+            declarations = body.declarations;
+        } else if (
+            body.type === esprima.Syntax.ExportNamedDeclaration &&
+            body.declaration
+        ) {
+            declarations = body.declaration.declarations;
+        }
+
+        declarations.forEach((declaration) => {
+            if (declaration.type === esprima.Syntax.VariableDeclarator) {
+                const name = declaration.id.name;
+                const codeBlock = codeLines.slice(
+                    declaration.loc.start.line - 1,
+                    declaration.loc.end.line + 1
+                );
+
+                fileData[path][name] = codeBlock;
+            }
+        });
+    });
+
+    return fileData;
+};
 
 const main = async () => {
     try {
         await dfs(servicePath);
 
-        console.log(pathCodeBlocks);
+        // console.log(pathCodeBlocks);
 
-        Array.from(pathCodeBlocks).forEach((entry) => {
-            const [key, value] = entry
+        console.log(fileDataLedger);
 
-            for (let index = 0; index < value.length; index++) {
-                const codeBlock = value[index];
+        // Array.from(pathCodeBlocks).forEach((entry) => {
+        //     const [key, value] = entry;
 
-                const importFunctions = getFunctionCallsByCodeBlock(codeBlock)
+        //     for (let index = 0; index < value.length; index++) {
+        //         const codeBlock = value[index];
 
-                console.log(importFunctions)
+        //         const importFunctions = getFunctionCallsByCodeBlock(codeBlock);
 
-                
-            }
-
-        });
+        //         console.log(importFunctions);
+        //     }
+        // });
 
         /* 
             Last TODO:
