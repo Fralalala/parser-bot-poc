@@ -1,0 +1,15 @@
+{
+    "dependencies": {
+        "@babel/parser": "^7.27.1",
+        "@babel/traverse": "^7.27.1",
+        "@types/babel__traverse": "^7.20.7",
+        "esprima": "^4.0.1",
+        "prettier": "^3.5.3",
+        "ts-node": "^10.9.2",
+        "typescript": "^5.8.3"
+    },
+    "type": "module",
+    "devDependencies": {
+        "@types/node": "^22.15.3"
+    }
+}
