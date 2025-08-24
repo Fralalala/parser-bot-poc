@@ -1,7 +1,11 @@
-const stringHelper = (word) => {
+const stringHelper = (word = 'default word') => {
     console.log("some words", word);
 
     return `hello ${word}`;
 };
 
-export { stringHelper };
+const lsome = () => {
+    someWords()
+}
+
+export { stringHelper, lsome };

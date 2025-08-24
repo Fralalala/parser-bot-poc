@@ -1,22 +1,53 @@
-import { stringHelper } from "../someFolder/utility";
+import {
+    stringHelper as haha,
+    lsome,
+    soemthiung,
+    newFunc,
+} from "../someFolder/utility";
 
 export const pingProducts = (req, res) => {
-    console.log("Pinged products controller");
+    // const someOtherWorld = () => {}
+    console.log(
+        "Pinged products controller",
+        haha.uhvjh.uygsda(something.obj.asudia())
+    );
 
-    const stringHelper = "sad";
+    haha(lsome());
+    haha();
+    haha();
+    haha();
+    haha();
+    haha();
 
-    console.log(stringHelper);
+    someOtherWorld();
+
+    // const haha = "sad";
+    // console.aiusdasd.oiwlkjend.log(haha(someRandomBullshit()));
 
     res.send("Pinged products");
 };
 
-const somethign = (req, res) => {
-    console.log("Pinged products controller");
+const something = (req, res) => {
+
+    sh9ibal()
+
+    console.log(pingProducts("Pinged products controller"));
     res.send("Pinged products");
 };
 
 export const heheh = (req, res) => {
     console.log("Pinged products controller");
-    somethign;
+    something;
     res.send("Pinged products");
 };
+
+/*
+    Given a block, remove where it's the declaration
+    and its corresponding call
+*/
+
+// internal functions
+// imported functions
+// declared functions then used inside as well
+
+pingProducts();

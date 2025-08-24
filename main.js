@@ -22,60 +22,13 @@ const pathCalls = {};
 // TODO: Enable folder path, so we check on each files of the folder
 const servicePath =
     "/Users/sirol/Desktop/projects/parser-bot/inner-main/file.js";
+const importPath =
+    "/Users/sirol/Desktop/projects/parser-bot/someFolder/utility.js";
 
 const getPrettyfiedFile = async (filePath) => {
     // add checker if it exists
     const code = readFileSync(filePath, "utf-8");
     return await format(code, { parser: "babel" });
-};
-
-const getCodeBlocks = (code) => {
-    const codeLines = code.split("\n");
-    const esprimaResponse = esprima.parseModule(code, { loc: true });
-
-    const data = {
-        importPaths: [],
-        blocks: [],
-        fucntions: [],
-    };
-
-    esprimaResponse.body.forEach((body) => {
-        const { start, end } = body.loc;
-        let functionName = "N/A";
-
-        if (supportedTypes.includes(body.type)) {
-            functionName =
-                body?.declaration?.declarations.find(
-                    (obj) => obj.id.type === esprima.Syntax.Identifier
-                )?.id?.name || functionName;
-        } else if (body.type === esprima.Syntax.VariableDeclaration) {
-            functionName = body.declarations.find(
-                (obj) => obj.id.type === esprima.Syntax.Identifier
-            ).id.name;
-        }
-
-        if (body.type === esprima.Syntax.ImportDeclaration) {
-            body.source.value && data.importPaths.push(body.source.value);
-
-            body.specifiers.forEach((specifier) => {
-                if (supportedImports.includes(specifier.type)) {
-                    const code = "";
-
-                    importDeclarationsNames[specifier.local.name] = {
-                        type: specifier.type,
-                        importPath: body.source.value,
-                        name: specifier.local.name,
-                        code: code,
-                    };
-                }
-            });
-        } else
-            data.blocks.push(
-                codeLines.slice(start.line - 1, end.line).join("\n")
-            );
-    });
-
-    return data;
 };
 
 const getImportFilePathFromRelativePath = (importPath, currentPath) => {
@@ -112,19 +65,19 @@ const getImportFilePathFromRelativePath = (importPath, currentPath) => {
 
 const visitedPaths = new Set();
 
-let fileDataLedger = {};
+// let pathToDeclarationMap = {};
+let declarationToPathMap = {};
 
-const dfs = async (path) => {
+const dfs = async (path, pathToDeclarationMap = {}) => {
     if (visitedPaths.has(path)) return;
 
-    // const code = await getPrettyfiedFile(path);
+    const code = await getPrettyfiedFile(path);
+    const esprimaResponse = esprima.parseModule(code, { loc: true });
 
-    // const { importPaths, blocks } = getCodeBlocks(code);
+    const fileData = getCodeBlocksByPath(code, path, esprimaResponse);
+    const paths = getImportPathsByFilePath(esprimaResponse);
 
-    const fileData = await getCodeBlocksByPath(path);
-    const paths = await getImportPathsByPath(path);
-
-    fileDataLedger = { ...fileDataLedger, ...fileData };
+    pathToDeclarationMap = { ...pathToDeclarationMap, ...fileData };
 
     visitedPaths.add(path);
 
@@ -134,18 +87,34 @@ const dfs = async (path) => {
             servicePath
         );
 
-        console.log("importFilePath", importFilePath);
+        const res = await dfs(importFilePath, pathToDeclarationMap);
 
-        await dfs(importFilePath);
+        Object.entries(res.pathToDeclarationMap).forEach((entry) => {
+            const [key, value] = entry;
+            Object.keys(value).forEach((names) => {
+                declarationToPathMap[names] = key;
+            });
+        });
+
+        pathToDeclarationMap = {
+            ...pathToDeclarationMap,
+            ...res.pathToDeclarationMap,
+        };
     }
+
+    return {
+        // redundant data if we already have it in pathToDeclaration
+        // code: fileData,
+        importVariables: esprimaResponse.body
+            .map((obj) => getImportVariables(obj))
+            .flat(),
+        esprimaResponse,
+        pathToDeclarationMap,
+        codeBlock: code,
+    };
 };
 
-const getImportPathsByPath = async (path) => {
-    const code = await getPrettyfiedFile(path);
-    const codeLines = code.split("\n");
-
-    const esprimaResponse = esprima.parseModule(code, { loc: true });
-
+const getImportPathsByFilePath = (esprimaResponse) => {
     const importPaths = [];
 
     esprimaResponse.body.forEach((body) => {
@@ -161,39 +130,41 @@ const getImportPathsByPath = async (path) => {
     return importPaths;
 };
 
-const getCodeBlocksByPath = async (path) => {
-    const code = await getPrettyfiedFile(path);
+const getCodeBlocksByPath = (code, path, esprimaResponse) => {
     const codeLines = code.split("\n");
 
     const fileData = {};
 
     if (!fileData[path]) fileData[path] = {};
 
-    const esprimaResponse = esprima.parseModule(code, { loc: true });
-
     esprimaResponse.body.forEach((body) => {
-        // Parses a variable and saves its code block
-
         let declarations = [];
 
-        if (body.type === esprima.Syntax.VariableDeclaration) {
+        if (body.type === esprima.Syntax.VariableDeclaration)
             declarations = body.declarations;
-        } else if (
+        else if (
             body.type === esprima.Syntax.ExportNamedDeclaration &&
             body.declaration
-        ) {
+        )
             declarations = body.declaration.declarations;
-        }
 
         declarations.forEach((declaration) => {
             if (declaration.type === esprima.Syntax.VariableDeclarator) {
                 const name = declaration.id.name;
-                const codeBlock = codeLines.slice(
-                    declaration.loc.start.line - 1,
-                    declaration.loc.end.line + 1
-                );
+                const code = codeLines
+                    .slice(
+                        declaration.loc.start.line - 1,
+                        declaration.loc.end.line + 1
+                    )
+                    .join("\n");
 
-                fileData[path][name] = codeBlock;
+                fileData[path][name] = {
+                    code,
+                    location: {
+                        start: declaration.loc.start.line,
+                        end: declaration.loc.end.line,
+                    },
+                };
             }
         });
     });
@@ -201,48 +172,275 @@ const getCodeBlocksByPath = async (path) => {
     return fileData;
 };
 
+/**
+ * Given an Esprima CallExpression Object, we will extract the call name.
+ * Example of a call name: `console.log` , `res.send.some.func`, etc
+ * @param {type} obj - Call Expression object
+ * @returns {type} Description of the return value.
+ */
+const getCallsByCallExpression = (obj) => {
+    if (obj.type !== esprima.Syntax.CallExpression) {
+        return [];
+    }
+
+    const callNames = [];
+    const callStack = [];
+
+    let isDefined = true;
+    let callee = obj.callee;
+
+    while (isDefined) {
+        if (callee.hasOwnProperty("object")) {
+            callStack.push(callee.property.name);
+            callee = callee.object;
+        } else {
+            callStack.push(callee.name);
+            isDefined = false;
+        }
+    }
+
+    callNames.push(callStack.reverse().join("."));
+
+    // might be inefficient to flat
+    if (obj.hasOwnProperty("arguments")) {
+        for (let index = 0; index < obj.arguments.length; index++) {
+            const arg = obj.arguments[index];
+
+            callNames.push(getCallsByCallExpression(arg));
+        }
+    }
+
+    return callNames.flat();
+};
+
+const getCallByExpressionStatement = (obj) => {
+    if (obj.type !== esprima.Syntax.ExpressionStatement) {
+        return null;
+    }
+
+    return getCallsByCallExpression(obj.expression);
+};
+
+// add an option for unique?
+const getFunctionCallsByCodeBlock = (
+    esprimaResponse,
+    removeDuplicates = false
+) => {
+    const callNames = [];
+
+    esprimaResponse.body.forEach((body) => {
+        let declarations = [];
+
+        if (body.type === esprima.Syntax.VariableDeclaration)
+            declarations = body.declarations;
+        else if (
+            body.type === esprima.Syntax.ExportNamedDeclaration &&
+            body.declaration
+        )
+            declarations = body.declaration.declarations;
+
+        declarations.forEach((declaration) => {
+            declaration.init.body.body.forEach((blockStatement) => {
+                if (
+                    blockStatement.type === esprima.Syntax.ExpressionStatement
+                ) {
+                    const funcCallName =
+                        getCallByExpressionStatement(blockStatement);
+
+                    callNames.push(funcCallName);
+                }
+            });
+        });
+    });
+
+    const res = callNames.flat();
+
+    if (removeDuplicates) return Array.from(new Set(res));
+
+    return res;
+};
+
+/*
+
+Iterate through a block statement
+
+The idea is to get all function calls that is not within the block statement
+
+If you get a variable declaration, then it's function call right after, 
+then we remove it from the list of calls.
+
+We should probably return two arrays, one to fetch all called functions
+another for returning calls that doesnt have it's declaration in the block statement
+
+*/
+
+const getImportVariables = (obj) => {
+    if (obj?.type !== esprima.Syntax.ImportDeclaration) return [];
+    return obj.specifiers.map((specifier) => ({
+        localName: specifier.local.name,
+        importName: specifier.imported.name,
+    }));
+};
+
+/**
+ * Gets expression names that is not initiated within the code block
+ * Example of a call name: `console.log` , `res.send.some.func`, etc
+ * @param {type} obj - Call Expression object
+ * @returns {type} Description of the return value.
+ */
+const getNoSourceCallNames = (blocks, importDeclarations = []) => {
+    // this should also contain the parameters
+    const declaredSet = new Set(importDeclarations); // initialize with what we have from file imports
+
+    const expressions = [];
+
+    const dfs = (blockStatements) => {
+        blockStatements.forEach((obj) => {
+            switch (obj.type) {
+                case esprima.Syntax.ExpressionStatement:
+                    const callNames = getCallByExpressionStatement(obj);
+
+                    for (let name of callNames) {
+                        name = name.split(".")[0];
+
+                        if (!declaredSet.has(name)) {
+                            expressions.push(name);
+                            declaredSet.add(name);
+                        }
+                    }
+
+                    break;
+                case esprima.Syntax.VariableDeclaration:
+                    dfs(obj.declarations);
+
+                    break;
+
+                case esprima.Syntax.VariableDeclarator:
+                    declaredSet.add(obj.id.name);
+
+                    dfs(obj.init.body.body);
+
+                    break;
+
+                case esprima.Syntax.ExportNamedDeclaration:
+                    dfs(obj.declaration.declarations);
+
+                    break;
+
+                default:
+                    // console.error(
+                    //     "Unhandled type in block statment filter process",
+                    //     obj.type
+                    // );
+                    break;
+            }
+        });
+    };
+
+    dfs(blocks);
+
+
+    return expressions;
+};
+
+const getExpressionParameters = (esprimaObj) => {
+    const parameters = [];
+
+    const dfs = (obj) => {
+        switch (obj.type) {
+            case esprima.Syntax.ExportNamedDeclaration:
+                dfs(obj.declaration);
+                break;
+
+            case esprima.Syntax.VariableDeclaration:
+                for (const declaration of obj.declarations) {
+                    if (declaration.init?.params) {
+                        for (const param of declaration.init.params) {
+                            parameters.push(param.name);
+                        }
+                    }
+                }
+                break;
+
+            default:
+                // console.error("found an expression we dont support", obj.type);
+                break;
+        }
+    };
+
+    for (const body of esprimaObj.body) {
+        dfs(body);
+    }
+
+    return parameters;
+};
+
+const findBlockByName = ( name, esprimaBody ) => {
+
+    
+
+}
+
 const main = async () => {
     try {
-        await dfs(servicePath);
+        const filePaths = [servicePath];
 
-        // console.log(pathCodeBlocks);
+        for (const path of filePaths) {
+            const {
+                code,
+                importVariables,
+                esprimaResponse,
+                pathToDeclarationMap,
+            } = await dfs(path);
 
-        console.log(fileDataLedger);
+            for (const block of Object.values(pathToDeclarationMap[servicePath])) {
+                const codeBlock = block["code"];
 
-        // Array.from(pathCodeBlocks).forEach((entry) => {
-        //     const [key, value] = entry;
+                // should only use esprimaResponse of the codeBlock
+                const expressionCalls = getFunctionCallsByCodeBlock(
+                    esprimaResponse,
+                    true
+                );
 
-        //     for (let index = 0; index < value.length; index++) {
-        //         const codeBlock = value[index];
+                const codeEsprima = esprima.parseModule(codeBlock, { loc: true });
 
-        //         const importFunctions = getFunctionCallsByCodeBlock(codeBlock);
+                const importLocalNames = importVariables.map(
+                    (obj) => obj.localName
+                );
 
-        //         console.log(importFunctions);
-        //     }
-        // });
+                // should only use esprimaResponse of the codeBlock
+                const noSourceCallNames = getNoSourceCallNames(
+                    codeEsprima.body,
+                    [
+                        // the arr below are calls from parameters
+                        ...getExpressionParameters(codeEsprima), // should we always do this? we can do this internally
+                    ]
+                )
+                    // TODO: we should also check the names inside the file
+                    // since it's possible for calls to have codes that references
+                    // variables inside of the file. JS has a concept of `hoisting`, review it
+                    // hoisting simplifies things, so we dont need to filter out all declared
+                    // calls in a file
+                    // Will only return no source call names that are from the imports
+                    .filter((name) => importLocalNames.includes(name));
 
-        /* 
-            Last TODO:
+                const importCodeBlocks = noSourceCallNames.map((name) => {
+                    const nameObj = importVariables.find(
+                        (nameObj) => nameObj.localName === name
+                    );
 
-            Note: When variable/function names are repeated, the previously found
-            name is overwritten
+                    return pathToDeclarationMap[importPath][nameObj.importName]
+                        ?.code;
+                });
 
-            1.  Per import, get all declared variables and functions
+                const context = `Main code:\n${codeBlock}\n---------\nReferenced Codes:\n${importCodeBlocks.join(`\n---------\n`)}`;
 
-                Structure the data as:
-                <variable_name> : <import_path>
+                console.log(context);
 
-                To allow quick look ups for later.
+                console.log('==========')
 
-            2.  Get all variable/function names per code block.
-            
-            3.  Intialize a string. This is where you'll place all related code blocks
-
-            4.  Per each of the names, check if they are part of the code imports
-                if they are, get their respective code block (need to make this code)
-                and add it in the Initialized String.
-                else do nothing
-        */
+            }
+        }
     } catch (error) {
         console.log(error);
     }
